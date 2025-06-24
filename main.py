@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix, classification_report, roc_curve, precision_recall_curve
-from sklearn.utils import resample
+from imblearn.over_sampling import SMOTE
 
 warnings.filterwarnings('ignore')
 
@@ -32,61 +32,6 @@ if 'data_processed' not in st.session_state:
     st.session_state.data_processed = False
 if 'models_trained' not in st.session_state:
     st.session_state.models_trained = False
-
-# Custom SMOTE implementation to replace imblearn dependency
-def simple_smote(X, y, random_state=42):
-    """
-    Simple implementation of SMOTE (Synthetic Minority Oversampling Technique)
-    to replace imblearn dependency
-    """
-    np.random.seed(random_state)
-    
-    # Convert to numpy arrays
-    X = np.array(X)
-    y = np.array(y)
-    
-    # Find minority and majority classes
-    unique_classes, class_counts = np.unique(y, return_counts=True)
-    minority_class = unique_classes[np.argmin(class_counts)]
-    majority_class = unique_classes[np.argmax(class_counts)]
-    
-    # Get indices for each class
-    minority_indices = np.where(y == minority_class)[0]
-    majority_indices = np.where(y == majority_class)[0]
-    
-    # Calculate how many synthetic samples to generate
-    target_count = len(majority_indices)
-    samples_to_generate = target_count - len(minority_indices)
-    
-    if samples_to_generate <= 0:
-        return X, y
-    
-    # Generate synthetic samples
-    synthetic_samples = []
-    
-    for _ in range(samples_to_generate):
-        # Randomly select a minority sample
-        idx = np.random.choice(minority_indices)
-        sample = X[idx]
-        
-        # Find k nearest neighbors (simplified: random selection from minority class)
-        neighbor_idx = np.random.choice(minority_indices)
-        neighbor = X[neighbor_idx]
-        
-        # Generate synthetic sample (interpolation)
-        alpha = np.random.random()
-        synthetic_sample = sample + alpha * (neighbor - sample)
-        synthetic_samples.append(synthetic_sample)
-    
-    # Combine original and synthetic data
-    if synthetic_samples:
-        synthetic_samples = np.array(synthetic_samples)
-        X_balanced = np.vstack([X, synthetic_samples])
-        y_balanced = np.hstack([y, np.full(len(synthetic_samples), minority_class)])
-    else:
-        X_balanced, y_balanced = X, y
-    
-    return X_balanced, y_balanced
 
 # Title and Introduction
 st.markdown("""
@@ -271,6 +216,7 @@ if st.session_state.data_loaded:
                                 color_continuous_scale="RdBu_r",
                                 aspect="auto")
             st.plotly_chart(fig_corr, use_container_width=True)
+        
 
 # ================================================================================================
 # SECTION 3: FEATURE ENGINEERING & PREPROCESSING
@@ -391,20 +337,18 @@ for column in categorical_columns:
         
         encoding_results = []
         for column in categorical_columns:
-            if column in df_processed.columns:
-                le = LabelEncoder()
-                unique_values = df_processed[column].unique()
-                df_processed[column] = le.fit_transform(df_processed[column])
-                label_encoders[column] = le
-                encoding_results.append({
-                    'Column': column,
-                    'Unique_Values': len(unique_values),
-                    'Encoded_Range': f"0 to {len(unique_values)-1}"
-                })
+            le = LabelEncoder()
+            unique_values = df_processed[column].unique()
+            df_processed[column] = le.fit_transform(df_processed[column])
+            label_encoders[column] = le
+            encoding_results.append({
+                'Column': column,
+                'Unique_Values': len(unique_values),
+                'Encoded_Range': f"0 to {len(unique_values)-1}"
+            })
         
-        if encoding_results:
-            encoding_df = pd.DataFrame(encoding_results)
-            st.dataframe(encoding_df)
+        encoding_df = pd.DataFrame(encoding_results)
+        st.dataframe(encoding_df)
         
         # Feature removal
         st.markdown("**🗑️ Step 7: Removing Redundant Features**")
@@ -446,19 +390,18 @@ df_processed = df_processed.drop(columns=features_to_drop, errors='ignore')
                 st.metric("New Features Added", len(processed_data.columns) - len(data.columns) + len(['EmployeeCount', 'EmployeeNumber', 'Over18', 'StandardHours']))
             
             # Show correlation with target
-            if 'Attrition' in processed_data.columns:
-                feature_importance = abs(processed_data.corr()['Attrition']).sort_values(ascending=False)[1:11]
-                
-                st.markdown("#### 🎯 Top 10 Features by Correlation with Attrition")
-                importance_df = pd.DataFrame({
-                    'Feature': feature_importance.index,
-                    'Correlation': feature_importance.values
-                })
-                
-                fig_importance = px.bar(importance_df, x='Correlation', y='Feature', 
-                                       orientation='h',
-                                       title="Feature Correlation with Attrition")
-                st.plotly_chart(fig_importance, use_container_width=True)
+            feature_importance = abs(processed_data.corr()['Attrition']).sort_values(ascending=False)[1:11]
+            
+            st.markdown("#### 🎯 Top 10 Features by Correlation with Attrition")
+            importance_df = pd.DataFrame({
+                'Feature': feature_importance.index,
+                'Correlation': feature_importance.values
+            })
+            
+            fig_importance = px.bar(importance_df, x='Correlation', y='Feature', 
+                                   orientation='h',
+                                   title="Feature Correlation with Attrition")
+            st.plotly_chart(fig_importance, use_container_width=True)
 
 # ================================================================================================
 # SECTION 4: MODEL TRAINING & COMPARISON
@@ -476,8 +419,9 @@ if st.session_state.data_processed:
     def train_models(X_train, y_train, X_test, y_test):
         """Train multiple ML models with comprehensive evaluation"""
         
-        # Apply our custom SMOTE implementation for balanced training data
-        X_train_balanced, y_train_balanced = simple_smote(X_train, y_train, random_state=42)
+        # Apply SMOTE for balanced training data
+        smote = SMOTE(random_state=42)
+        X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
         
         # Feature scaling
         scaler = StandardScaler()
@@ -526,11 +470,6 @@ if st.session_state.data_processed:
         with st.spinner("Training multiple models..."):
             # Prepare data
             processed_data = st.session_state.processed_data
-            
-            if 'Attrition' not in processed_data.columns:
-                st.error("❌ Attrition column not found in processed data. Please check data preprocessing.")
-                st.stop()
-            
             X = processed_data.drop(['Attrition'], axis=1)
             y = processed_data['Attrition']
             
@@ -668,11 +607,6 @@ feature_importance = pd.DataFrame({
                 st.write(f"**{i}. {row['feature']}** - Importance: {row['importance']:.3f}")
         else:
             st.info(f"Feature importance not available for {best_model} model type.")
-
-# Add a note about the library fix
-st.markdown("---")
-st.info("🔧 **Technical Note**: This version uses a custom implementation of SMOTE to avoid dependency issues with imblearn library.")
-
 
 # ================================================================================================
 # SECTION 5: SINGLE EMPLOYEE PREDICTION
